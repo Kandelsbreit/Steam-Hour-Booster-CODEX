@@ -1,0 +1,9 @@
+baseline/
+*.zip
+dist/
+source/node_modules/
+source/dist/
+source/.smoke-data/
+.test-output/
+*.log
+.release-staging/

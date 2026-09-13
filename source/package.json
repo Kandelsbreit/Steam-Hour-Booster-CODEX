@@ -1,0 +1,23 @@
+{
+  "name": "agnia-steam-hours",
+  "productName": "Agnia Steam Hours",
+  "version": "1.1.0",
+  "description": "Independent Steam idle client with encrypted sessions and game rotation",
+  "main": "src/main.js",
+  "author": "Agnia",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test test/*.test.js",
+    "test:ui": "node test/ui-smoke.cjs",
+    "pack:win": "node scripts/build.cjs"
+  },
+  "dependencies": {
+    "steam-user": "5.3.0"
+  },
+  "devDependencies": {
+    "@electron/packager": "19.0.1",
+    "electron": "44.3.0",
+    "playwright": "1.58.2"
+  }
+}
