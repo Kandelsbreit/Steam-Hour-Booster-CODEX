@@ -19,8 +19,14 @@ Publish release to Kandelsbreit/Steam-Hour-Booster-CODEX; copy ZIP to Windows De
 - EXE and app.asar versions verified as 1.1.0. Original store.js unchanged byte-for-byte.
 - User documentation and validation limitations written.
 
-## Remaining
-- Final ZIP, SHA-256, Desktop copy, source commit and GitHub release.
+## Distribution completed
+- Release: https://github.com/Kandelsbreit/Steam-Hour-Booster-CODEX/releases/tag/v1.1.0
+- Source commit: d84b028 (release code).
+- ZIP: dist/AgniaSteamHours-1.1.0-Windows-x64.zip, 167856438 bytes.
+- Desktop: C:/Users/RL/Desktop/AgniaSteamHours-1.1.0-Windows-x64.zip.
+- SHA-256: a8b704eb15be03f38fed4377d401a045e40b09860018e8ccfe05a77f807bde0a.
+- Local ZIP, Desktop ZIP and GitHub asset digest match. Release is published, not a draft; ZIP and SHA256SUMS.txt both uploaded.
+- No remaining implementation or distribution steps for 1.1.0.
 
 ## Validation limits
 No real Steam credentials have been used. Real Steam hour credit and remote-PC handoff require a live account.
