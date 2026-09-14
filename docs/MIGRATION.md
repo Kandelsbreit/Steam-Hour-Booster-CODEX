@@ -1,18 +1,36 @@
 # Миграция Electron → Wails v2
 
-Baseline: commit 1028d72, Electron 1.1.0, все 32 исходных теста прошли перед изменениями. Исходники доступны в истории Git и исходных ZIP; пользовательские данные не изменялись во время разработки.
+Baseline: commit `1028d72`, Electron 1.1.0. Перед переносом прошли все 32 исходных Node-теста. Предыдущая реализация остаётся доступна в Git-истории и в исходном архиве; рабочие пользовательские данные не перезаписываются без резервной копии.
 
-| Исходный компонент | Новая ответственность |
+| Раньше | Теперь |
 |---|---|
-| engine.js | internal/engine: состояние аккаунтов, партии, события, reconnect |
-| steam-user | internal/steam: адаптер GoSteam v0.2.0, отдельный Client на аккаунт |
-| store.js / safeStorage | internal/storage: атомарный JSON, DPAPI, чтение старого AES-GCM Local State |
-| features.js / features-store.js | internal/model + engine: прежние настройки, расписание, цели, история |
-| backup.js | internal/backup: совместимый AGNIA1 gzip/scrypt/AES-GCM |
-| telegram.js / http.js | internal/telegram: HTTP API, ограничение отправителя, backoff |
-| main.js / preload.js | app.go + Wails bindings/events + Windows lifecycle |
-| HTML/CSS/renderer.js | frontend: прежние экраны, только замена IPC |
+| Electron main/preload IPC | `app.go`, Wails bindings и events |
+| `engine.js` и `features.js` | `internal/engine` |
+| `steam-user` | `internal/steam`, собственный интерфейс поверх GoSteam v0.2.0 |
+| `store.js` / Electron safeStorage | `internal/storage`: атомарные файлы, DPAPI и чтение legacy AES-GCM |
+| `features-store.js` | `internal/model`, встроенный каталог и Go persistence |
+| `backup.js` | `internal/backup`, совместимый AGNIA1 gzip/scrypt/AES-GCM |
+| `telegram.js` / `http.js` | `internal/telegram` и `internal/netx` |
+| Electron autostart / power monitor | `internal/platform` и Windows lifecycle Wails |
+| HTML/CSS/renderer | `frontend`, сохранён vanilla интерфейс; Electron bridge заменён на `bridge.js` |
 
-GoSteam используется без форка и без собственного CM/protobuf-клиента. Библиотека не предоставляет GetOwnedGames: библиотека игр читается через Steam HTTPS API с авторизацией текущей сессии, а не отдельный CM transport.
+## Границы Steam
 
-Непроверенное с реальным аккаунтом не считается подтверждённым. Live harness требует явного интерактивного ввода учётных данных; обычные тесты используют fake только на границе Steam.
+`internal/steam.Client` скрывает GoSteam от движка. На каждый аккаунт создаётся отдельный client. Адаптер выполняет парольный вход, refresh token, Steam Guard, `PlayGamesConfirmed`, `ClearGames`, `RequestFreeLicense`, события игровой сессии и штатное закрытие соединения.
+
+GoSteam не предоставляет публичный `GetOwnedGames`; кеш библиотеки запрашивается через Steam HTTPS API с access token текущей сессии. Это не новый CM/protobuf-клиент.
+
+## Совместимость данных
+
+При первом штатном запуске создаётся `migration-backup-*`, затем конфигурация читается в прежнем JSON-формате. Старые Electron-секреты расшифровываются только локальным DPAPI и после успешного входа сохраняются в `secrets-v2`. Старые файлы остаются на месте. `FORGOTTEN` tombstone не даёт старой сессии появиться вновь после явного «Забыть вход».
+
+## Проверяемые инварианты
+
+- один account — один client и одна последовательность reconnect;
+- desired state переживает временную сеть и conflict, но ручная остановка отменяет его;
+- remote playing session очищает текущую партию и не вытесняет настоящую игру;
+- результаты старой асинхронной партии не могут вернуть игры после `ClearGames` или изменения настроек;
+- закрытие отменяет contexts, очищает игры, закрывает clients и ждёт goroutines;
+- refresh token, access token, GuardData и пароль не появляются в snapshot, логах или тестовых сообщениях.
+
+Реальные Steam-операции не заявляются проверенными без интерактивного smoke harness и учётной записи владельца.
