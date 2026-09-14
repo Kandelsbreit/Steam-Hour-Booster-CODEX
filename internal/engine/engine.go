@@ -44,6 +44,7 @@ type Engine struct {
 	Config                        model.Config
 	Features                      model.Features
 	factory                       steam.Factory
+	network                       func() bool
 	clock                         func() time.Time
 	live                          map[string]*live
 	ctx                           context.Context
@@ -60,11 +61,18 @@ func New(store *storage.Store, c model.Config, f model.Features, factory steam.F
 		clock = time.Now
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	e := &Engine{Store: store, Config: c, Features: f, factory: factory, clock: clock, ctx: ctx, cancel: cancel, live: map[string]*live{}, alerts: make(chan model.Notice, 100), startedAt: clock(), lastSave: clock(), lastTick: clock()}
+	e := &Engine{Store: store, Config: c, Features: f, factory: factory, network: func() bool { return true }, clock: clock, ctx: ctx, cancel: cancel, live: map[string]*live{}, alerts: make(chan model.Notice, 100), startedAt: clock(), lastSave: clock(), lastTick: clock()}
 	for _, a := range c.Accounts {
 		e.live[a.ID] = e.fresh()
 	}
 	return e
+}
+func (e *Engine) SetNetworkProbe(probe func() bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if probe != nil {
+		e.network = probe
+	}
 }
 func (e *Engine) fresh() *live {
 	return &live{status: "Остановлено", sent: []uint32{}, lastTick: e.clock()}
@@ -192,6 +200,15 @@ func (e *Engine) start(id, password string) error {
 	r.workMS = 0
 	r.breakUntil = 0
 	r.failures = 0
+	if !e.network() {
+		if password != "" {
+			r.desired = false
+			return errors.New("Нет сети или VPN. Подключись и повтори вход: пароль не сохраняется")
+		}
+		r.retryAt = e.clock().Add(15 * time.Second).UnixMilli()
+		r.status = "Ожидание сети или VPN…"
+		return nil
+	}
 	e.connect(*a, r, password)
 	return nil
 }
@@ -334,6 +351,9 @@ func (e *Engine) fail(id string, r *live, code int) {
 		delay := Backoff(code, r.failures)
 		r.retryAt = e.clock().Add(delay).UnixMilli()
 		r.status = fmt.Sprintf("Нет связи: повтор через %d с", int(delay.Seconds()))
+		if code == 2 || code == 20 {
+			r.status = fmt.Sprintf("Steam временно недоступен: повтор через %d с", int(delay.Seconds()))
+		}
 		if conflict {
 			r.blocked = true
 			r.status = fmt.Sprintf("Сессия занята: проверка через %d с", int(delay.Seconds()))
@@ -484,6 +504,10 @@ func (e *Engine) Tick() {
 	now := e.clock()
 	ms := now.UnixMilli()
 	o := e.Features.Options
+	libraryHours := o.LibraryHours
+	if o.TrafficMode == "low" && libraryHours > 0 && libraryHours < 24 {
+		libraryHours = 24
+	}
 	gap := now.Sub(e.lastTick)
 	e.lastTick = now
 	for i := range e.Config.Accounts {
@@ -525,7 +549,12 @@ func (e *Engine) Tick() {
 			e.log(a.ID, "Начался запланированный перерыв")
 		}
 		if r.desired && r.client == nil && !r.closing && r.retryAt > 0 && ms >= r.retryAt {
-			e.connect(a, r, "")
+			if !e.network() {
+				r.retryAt = ms + 15000
+				r.status = "Ожидание сети или VPN…"
+			} else {
+				e.connect(a, r, "")
+			}
 		}
 		if r.online && r.client != nil {
 			state := r.client.State()
@@ -560,7 +589,7 @@ func (e *Engine) Tick() {
 				e.apply(a, r)
 			}
 		}
-		if r.online && o.LibraryHours > 0 && !r.libraryBusy && ms-d.LibraryAt >= int64(o.LibraryHours)*3600000 && ms-r.libraryAttempt >= 900000 {
+		if r.online && libraryHours > 0 && !r.libraryBusy && ms-d.LibraryAt >= int64(libraryHours)*3600000 && ms-r.libraryAttempt >= 900000 {
 			e.libraryLocked(a.ID, r)
 		}
 		e.goals(a.ID)
@@ -776,7 +805,7 @@ func (e *Engine) Snapshot() map[string]any {
 	}
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
-	return model.Clone(map[string]any{"version": "2.0.0", "autoLaunch": e.Config.AutoLaunch, "accounts": accounts, "logs": e.Features.Logs, "notifications": e.Features.Notifications, "options": e.Features.Options, "telegram": e.Features.Telegram, "presets": Builtins, "popular": Popular, "dataPath": e.Store.Dir, "fatal": e.fatal, "health": map[string]any{"uptimeMs": e.clock().Sub(e.startedAt).Milliseconds(), "heartbeat": e.lastTick.UnixMilli(), "network": true, "memoryMB": m.Sys / 1048576, "bytes": map[string]int{"httpReceived": 0, "httpSent": 0, "requests": 0}}})
+	return model.Clone(map[string]any{"version": "2.1.0", "autoLaunch": e.Config.AutoLaunch, "accounts": accounts, "logs": e.Features.Logs, "notifications": e.Features.Notifications, "options": e.Features.Options, "telegram": e.Features.Telegram, "profiles": e.Features.Profiles, "presets": Builtins, "popular": Popular, "dataPath": e.Store.Dir, "fatal": e.fatal, "health": map[string]any{"uptimeMs": e.clock().Sub(e.startedAt).Milliseconds(), "heartbeat": e.lastTick.UnixMilli(), "network": true, "memoryMB": m.Sys / 1048576, "bytes": map[string]int{"httpReceived": 0, "httpSent": 0, "requests": 0}}})
 }
 func (e *Engine) Data() (model.Config, model.Features) {
 	e.mu.Lock()

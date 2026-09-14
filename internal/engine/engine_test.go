@@ -252,6 +252,59 @@ func TestGameBatchesDoesNotInventGamesBelowBatchLimit(t *testing.T) {
 		t.Fatal(got)
 	}
 }
+
+func TestWaitsForNetworkBeforeTokenReconnect(t *testing.T) {
+	f := setup(t)
+	if err := f.e.Store.SaveToken(f.id, model.Secret{RefreshToken: "TEST_ONLY_TOKEN"}); err != nil {
+		t.Fatal(err)
+	}
+	var online atomic.Bool
+	f.e.SetNetworkProbe(online.Load)
+	if err := f.e.Start(f.id, ""); err != nil {
+		t.Fatal(err)
+	}
+	if !f.read(func(r *live) bool {
+		return r.desired && r.client == nil && strings.Contains(r.status, "Ожидание")
+	}) {
+		t.Fatal("token reconnect did not wait for network")
+	}
+	f.tick(30)
+	f.mu.Lock()
+	created := len(f.clients)
+	f.mu.Unlock()
+	if created != 0 {
+		t.Fatal("client created while network was unavailable")
+	}
+	online.Store(true)
+	f.tick(15)
+	eventually(t, func() bool { return f.read(func(r *live) bool { return r.online }) })
+}
+
+func TestProfilesSaveAndApply(t *testing.T) {
+	f := setup(t)
+	if err := f.e.SaveProfile("Ночной"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.e.Update(f.id, []uint32{99}, 1, 5, false); err != nil {
+		t.Fatal(err)
+	}
+	o := model.Defaults()
+	o.TrafficMode = "low"
+	if err := f.e.Options(o); err != nil {
+		t.Fatal(err)
+	}
+	_, data := f.e.Data()
+	if len(data.Profiles) != 1 {
+		t.Fatal("profile missing")
+	}
+	if err := f.e.ApplyProfile(data.Profiles[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	c, after := f.e.Data()
+	if !reflect.DeepEqual(c.Accounts[0].AppIDs, makeRange(1, 65)) || after.Options.TrafficMode != "normal" {
+		t.Fatal("profile was not restored", c.Accounts[0].AppIDs, after.Options.TrafficMode)
+	}
+}
 func TestRemotePauseResume(t *testing.T) {
 	f := setup(t)
 	c := f.login(t)

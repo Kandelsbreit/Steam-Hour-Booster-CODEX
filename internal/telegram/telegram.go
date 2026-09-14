@@ -93,9 +93,24 @@ func (b *Bot) Save(c model.Telegram, token string) error {
 		c.Offset = 0
 		c.LastDaily = ""
 	}
+	previous, previousErr := b.e.Store.ReadSecret("telegram")
 	b.stop()
 	if token != "" {
 		if err := b.e.Store.WriteSecret("telegram", []byte(token)); err != nil {
+			b.restart()
+			return err
+		}
+	}
+	if c.Enabled {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		err := b.verify(ctx, c.ChatID)
+		cancel()
+		if err != nil {
+			if previousErr == nil {
+				_ = b.e.Store.WriteSecret("telegram", previous)
+			} else if token != "" {
+				_ = b.e.Store.Forget("telegram")
+			}
 			b.restart()
 			return err
 		}
@@ -105,6 +120,25 @@ func (b *Bot) Save(c model.Telegram, token string) error {
 		return err
 	}
 	b.restart()
+	return nil
+}
+
+func (b *Bot) verify(ctx context.Context, chat string) error {
+	if err := b.api(ctx, "getMe", map[string]any{}, nil); err != nil {
+		return err
+	}
+	var hook struct {
+		URL string `json:"url"`
+	}
+	if err := b.api(ctx, "getWebhookInfo", map[string]any{}, &hook); err != nil {
+		return err
+	}
+	if hook.URL != "" {
+		return errors.New("Telegram: у бота настроен webhook; отключи его или используй другого бота")
+	}
+	if err := b.api(ctx, "getChat", map[string]any{"chat_id": chat}, nil); err != nil {
+		return err
+	}
 	return nil
 }
 

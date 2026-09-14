@@ -13,6 +13,7 @@ import (
 	"github.com/Kandelsbreit/Steam-Hour-Booster-CODEX/internal/steam"
 	"github.com/Kandelsbreit/Steam-Hour-Booster-CODEX/internal/storage"
 	"github.com/Kandelsbreit/Steam-Hour-Booster-CODEX/internal/telegram"
+	"github.com/Kandelsbreit/Steam-Hour-Booster-CODEX/internal/update"
 	"github.com/energye/systray"
 	wr "github.com/wailsapp/wails/v2/pkg/runtime"
 	"os"
@@ -28,6 +29,7 @@ type App struct {
 	test     bool
 	e        *engine.Engine
 	bot      *telegram.Bot
+	updates  *update.Checker
 	failure  string
 	cancel   context.CancelFunc
 	wg       sync.WaitGroup
@@ -60,7 +62,9 @@ func (a *App) startup(ctx context.Context) {
 		}
 	}
 	a.e = engine.New(s, c, f, factory, nil)
+	a.e.SetNetworkProbe(platform.Online)
 	a.bot = telegram.New(a.e)
+	a.updates = update.New()
 	if !a.test {
 		if c.AutoLaunch {
 			if err = platform.AutoLaunch(true); err != nil {
@@ -115,6 +119,9 @@ func (a *App) ready(ctx context.Context) {
 		if f.Options.StartMinimized {
 			wr.WindowHide(a.ctx)
 		}
+		if f.Options.TrafficMode != "low" {
+			go a.checkUpdate(false)
+		}
 	}
 }
 func (a *App) show() {
@@ -162,7 +169,28 @@ func (a *App) snapshot() map[string]any {
 	h["network"] = platform.Online()
 	h["memoryMB"] = platform.MemoryMB()
 	h["bytes"] = netx.Meter()
+	if a.updates != nil {
+		s["update"] = a.updates.Snapshot()
+	}
 	return s
+}
+func (a *App) checkUpdate(manual bool) (any, error) {
+	if a.updates == nil {
+		return nil, errors.New("Проверка обновлений пока недоступна")
+	}
+	ctx, cancel := context.WithTimeout(a.ctx, 15*time.Second)
+	defer cancel()
+	state, err := a.updates.Check(ctx)
+	if a.ctx != nil {
+		wr.EventsEmit(a.ctx, "snapshot", a.snapshot())
+	}
+	if err != nil {
+		return nil, err
+	}
+	if state.Available && !manual && a.ctx != nil {
+		wr.EventsEmit(a.ctx, "app-error", state.Status+". Открой «Настройки», чтобы перейти к релизу.")
+	}
+	return state.Status, nil
 }
 func decode(p map[string]any, out any) error {
 	b, err := json.Marshal(p)
@@ -266,6 +294,17 @@ func (a *App) command(command string, p map[string]any) (any, error) {
 			return nil, err
 		}
 		return nil, a.e.Options(o)
+	case "profile-save":
+		return nil, a.e.SaveProfile(str(p, "name"))
+	case "profile-apply":
+		return nil, a.e.ApplyProfile(str(p, "profile"))
+	case "profile-delete":
+		return nil, a.e.DeleteProfile(str(p, "profile"))
+	case "check-update":
+		if a.test {
+			return nil, errors.New("Проверка GitHub отключена в тестовом профиле")
+		}
+		return a.checkUpdate(true)
 	case "telegram":
 		var c model.Telegram
 		if err := decode(p, &c); err != nil {

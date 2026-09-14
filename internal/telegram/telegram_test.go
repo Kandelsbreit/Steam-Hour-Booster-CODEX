@@ -80,3 +80,26 @@ func TestSaveValidatesWithoutEnablingNetwork(t *testing.T) {
 		t.Fatal("token was not protected")
 	}
 }
+
+func TestSaveChecksBotAndChatBeforeEnabling(t *testing.T) {
+	b := testBot(t)
+	var methods []string
+	b.request = func(_ context.Context, address string, _ any, out any) (int, error) {
+		for _, method := range []string{"getMe", "getWebhookInfo", "getChat"} {
+			if strings.HasSuffix(address, "/"+method) {
+				methods = append(methods, method)
+			}
+		}
+		raw, _ := json.Marshal(map[string]any{"ok": true, "result": map[string]any{}})
+		_ = json.Unmarshal(raw, out)
+		return 200, nil
+	}
+	c := model.Telegram{Enabled: true, ChatID: "123", DailyTime: "21:00", Daily: true, Errors: true}
+	if err := b.Save(c, "123456:TEST_ONLY_SECRET_VALUE_123456789"); err != nil {
+		t.Fatal(err)
+	}
+	b.Stop()
+	if !strings.Contains(strings.Join(methods, ","), "getMe") || !strings.Contains(strings.Join(methods, ","), "getChat") {
+		t.Fatal("credentials and chat were not checked", methods)
+	}
+}

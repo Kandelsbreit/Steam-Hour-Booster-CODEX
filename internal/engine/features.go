@@ -147,3 +147,83 @@ func (e *Engine) Edit(id, command string, p model.Preset, g model.Game, goal mod
 	e.goals(id)
 	return nil
 }
+
+func (e *Engine) SaveProfile(name string) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	name = strings.TrimSpace(name)
+	if name == "" || len([]rune(name)) > 80 {
+		return errors.New("Название профиля: 1–80 символов")
+	}
+	profile := model.Profile{ID: uuid.NewString(), Name: name, Options: model.Clone(e.Features.Options), Accounts: make([]model.ProfileAccount, 0, len(e.Config.Accounts))}
+	for _, account := range e.Config.Accounts {
+		profile.Accounts = append(profile.Accounts, model.ProfileAccount{Name: account.Name, AppIDs: append([]uint32{}, account.AppIDs...), BatchSize: account.BatchSize, RotationMinutes: account.RotationMinutes, AutoStart: account.AutoStart})
+	}
+	for i, existing := range e.Features.Profiles {
+		if strings.EqualFold(existing.Name, name) {
+			profile.ID = existing.ID
+			e.Features.Profiles[i] = profile
+			return e.save()
+		}
+	}
+	e.Features.Profiles = append(e.Features.Profiles, profile)
+	return e.save()
+}
+
+func (e *Engine) DeleteProfile(id string) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	profiles := e.Features.Profiles[:0]
+	found := false
+	for _, profile := range e.Features.Profiles {
+		if profile.ID == id {
+			found = true
+			continue
+		}
+		profiles = append(profiles, profile)
+	}
+	if !found {
+		return errors.New("Профиль не найден")
+	}
+	e.Features.Profiles = profiles
+	return e.save()
+}
+
+func (e *Engine) ApplyProfile(id string) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	var profile *model.Profile
+	for i := range e.Features.Profiles {
+		if e.Features.Profiles[i].ID == id {
+			profile = &e.Features.Profiles[i]
+			break
+		}
+	}
+	if profile == nil {
+		return errors.New("Профиль не найден")
+	}
+	oldConfig, oldFeatures := model.Clone(e.Config), model.Clone(e.Features)
+	e.Features.Options = model.Clone(profile.Options)
+	for _, saved := range profile.Accounts {
+		for i := range e.Config.Accounts {
+			account := &e.Config.Accounts[i]
+			if !strings.EqualFold(account.Name, saved.Name) {
+				continue
+			}
+			account.AppIDs = append([]uint32{}, saved.AppIDs...)
+			account.BatchSize = saved.BatchSize
+			account.RotationMinutes = saved.RotationMinutes
+			account.AutoStart = saved.AutoStart
+			r := e.live[account.ID]
+			r.index = 0
+			r.batchElapsed = 0
+			e.clearLocked(account.ID, r)
+		}
+	}
+	if err := e.save(); err != nil {
+		e.Config, e.Features = oldConfig, oldFeatures
+		return err
+	}
+	e.log("", "Применён профиль «"+profile.Name+"»")
+	return nil
+}

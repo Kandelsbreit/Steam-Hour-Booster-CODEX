@@ -6,7 +6,7 @@ const hours=ms=>(ms/3600000).toLocaleString('ru-RU',{minimumFractionDigits:2,max
 const duration=ms=>{const s=Math.max(0,Math.floor(ms/1000));return `${Math.floor(s/3600)}:${String(Math.floor(s/60)%60).padStart(2,'0')}:${String(s%60).padStart(2,'0')}`;};
 const stamp=ms=>ms?new Date(ms).toLocaleString('ru-RU'):'ещё не загружены';
 const dateKey=d=>`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
-let state={accounts:[],logs:[],presets:[],popular:[]},selected=null,page='boost',dirty=false,formsReady=false,libraryKey='',navKey='',presetKey='',overviewKey='',queueKey='';
+let state={accounts:[],logs:[],presets:[],popular:[]},selected=null,page='boost',dirty=false,formsReady=false,optionsKey='',libraryKey='',navKey='',presetKey='',overviewKey='',queueKey='';
 const titles={boost:['Пусть часы идут.','Аккаунты, текущие партии и автоматическое восстановление.'],games:['Твоя библиотека.','Выбирай игры. Остальное сделает очередь.'],presets:['Набор на любой день.','Готовые и собственные пресеты выбранного аккаунта.'],stats:['Каждый час на виду.','История сохраняется между запусками программы.'],diagnostics:['Всё ли в порядке?','Состояние, причины остановок и журнал работы.'],telegram:['Всегда под рукой.','Статус и управление из твоего личного чата.'],settings:['В твоём ритме.','Автоматизация, экономия трафика и резервные копии.']};
 function notice(text){$('notice').textContent=text;$('notice').hidden=!text;}
 async function command(name,payload={}){
@@ -95,15 +95,23 @@ function renderStats(a){
 function renderDiagnostics(){
   const h=state.health;if(!h)return;$('uptime').textContent=duration(h.uptimeMs);$('memory').textContent=h.memoryMB+' МБ';$('heartbeat').textContent=new Date(h.heartbeat).toLocaleTimeString('ru-RU');
   $('health-accounts').replaceChildren(...state.accounts.map(a=>el('p',`${a.name}: ${a.status} · ${a.online?'подключён':'не подключён'} · повторных ошибок: ${a.failures}${a.retryAt?' · повтор '+stamp(a.retryAt):''}`,'muted')));
-  $('traffic').textContent=`HTTP за запуск: получено ${(h.bytes.httpReceived/1024).toFixed(1)} КБ, отправлено ${(h.bytes.httpSent/1024).toFixed(1)} КБ · запросов: ${h.bytes.requests}. Обновление Steam: ${state.options.libraryHours?state.options.libraryHours+' ч':'только вручную'}.`;
+  $('traffic').textContent=`HTTP за запуск: получено ${(h.bytes.httpReceived/1024).toFixed(1)} КБ, отправлено ${(h.bytes.httpSent/1024).toFixed(1)} КБ · запросов: ${h.bytes.requests}. Режим: ${state.options.trafficMode==='low'?'экономный':'обычный'}; обновление Steam: ${state.options.libraryHours?state.options.libraryHours+' ч':'только вручную'}.`;
+  $('diagnostic-current').replaceChildren(...state.accounts.map(a=>el('p',`${a.name}: ${a.current.length} игр${a.current.length?' — '+a.current.map(id=>gameName(a,id)).join(', '):''}`,'muted')));
+  $('diagnostic-telegram').textContent=state.telegram.status+(state.telegram.enabled?' · бот включён':' · бот выключен')+(state.telegram.hasToken?' · токен сохранён':' · токен не задан');
   $('logs').replaceChildren(...state.logs.slice().reverse().map(l=>el('div',`${stamp(l.time)}  ${l.account}: ${l.message}`)));
   $('notifications').replaceChildren(...state.notifications.slice().reverse().map(n=>el('p',stamp(n.time)+' · '+n.message)));
 }
-const optionFields={startupDelay:'startup-delay',libraryHours:'library-hours',startMinimized:'start-minimized',scheduleEnabled:'schedule-enabled',scheduleStart:'schedule-start',scheduleEnd:'schedule-end',breakEvery:'break-every',breakMinutes:'break-minutes',stopAfter:'stop-after'};
+const optionFields={startupDelay:'startup-delay',libraryHours:'library-hours',trafficMode:'traffic-mode',startMinimized:'start-minimized',scheduleEnabled:'schedule-enabled',scheduleStart:'schedule-start',scheduleEnd:'schedule-end',breakEvery:'break-every',breakMinutes:'break-minutes',stopAfter:'stop-after'};
 function initForms(){
   for(const [key,id]of Object.entries(optionFields)){const input=$(id);if(input.type==='checkbox')input.checked=state.options[key];else input.value=state.options[key];}
   $('schedule-days').replaceChildren(...[1,2,3,4,5,6,0].map(day=>{const label=el('label',undefined,'check');const check=el('input');check.type='checkbox';check.value=day;check.checked=state.options.scheduleDays.includes(day);label.append(check,document.createTextNode(['Вс','Пн','Вт','Ср','Чт','Пт','Сб'][day]));return label;}));
   $('telegram-chat').value=state.telegram.chatId;$('telegram-enabled').checked=state.telegram.enabled;$('telegram-errors').checked=state.telegram.errors;$('telegram-daily').checked=state.telegram.daily;$('telegram-time').value=state.telegram.dailyTime;
+}
+function renderProfiles(){
+  const profiles=state.profiles||[];
+  $('profile-list').replaceChildren(...profiles.map(p=>{const row=el('div',undefined,'row profile-row');row.append(el('span',`${p.name} · ${p.accounts.length} аккаунта(ов)`,'muted'),btn('Применить',()=>command('profile-apply',{profile:p.id})),btn('Удалить',()=>{if(confirm('Удалить профиль «'+p.name+'»?'))command('profile-delete',{profile:p.id});}));return row;}));
+  if(!profiles.length)$('profile-list').append(el('p','Сохрани текущие наборы игр и автоматизацию, чтобы переключать их одной кнопкой.','muted'));
+  const u=state.update||{};$('update-status').textContent=u.status||'Проверка обновлений ещё не выполнялась';$('update-link').hidden=!u.available||!u.url;if(u.available)$('update-link').href=u.url;
 }
 function render(next){
   state=next;if(!state.accounts.some(a=>a.id===selected)){selected=state.accounts[0]?.id||null;if(selected)fill(currentAccount(),true);}
@@ -119,7 +127,7 @@ function render(next){
     const scope=$('stats-scope').value;$('stats-scope').replaceChildren(el('option','Все аккаунты'));$('stats-scope').firstChild.value='all';for(const a of state.accounts){const o=el('option',a.name);o.value=a.id;$('stats-scope').append(o);}if([...$('stats-scope').options].some(o=>o.value===scope))$('stats-scope').value=scope;
   }
   if(!state.options)return;
-  if(!formsReady){formsReady=true;initForms();}
+  const nextOptionsKey=JSON.stringify(state.options);if(!formsReady||optionsKey!==nextOptionsKey){formsReady=true;optionsKey=nextOptionsKey;initForms();}
   $('network-state').textContent=state.health.network?'● Сеть доступна':'○ Ожидание сети';$('data-path').textContent='Данные: '+state.dataPath;
   $('telegram-status').textContent=state.telegram.status;$('telegram-token-hint').textContent=state.telegram.hasToken?'Токен сохранён. Оставь поле пустым, чтобы сохранить текущий.':'Токен ещё не сохранён.';
   if(page==='boost')renderBoost(a);
@@ -127,6 +135,7 @@ function render(next){
   if(page==='presets'&&a)renderPresets(a);
   if(page==='stats')renderStats(a);
   if(page==='diagnostics')renderDiagnostics();
+  if(page==='settings')renderProfiles();
 }
 async function save(){const id=selected;const answer=await command('save',{id,appids:$('appids').value,batchSize:Number($('batch-size').value),rotationMinutes:Number($('rotation').value),autoStart:$('auto-start').checked});if(answer&&selected===id){fill(currentAccount());$('dirty').textContent='Сохранено';notice('Настройки игр сохранены');}return answer;}
 document.querySelectorAll('[data-page]').forEach(b=>b.onclick=()=>switchPage(b.dataset.page));
@@ -153,6 +162,8 @@ $('forget').onclick=()=>{if(confirm('Удалить сохранённую се�
 $('remove').onclick=()=>{if(confirm('Удалить аккаунт, его настройки, статистику и сохранённый вход?'))command('remove',{id:selected});};
 $('autolaunch').onchange=()=>command('autolaunch',{enabled:$('autolaunch').checked});
 $('options-form').onsubmit=async e=>{e.preventDefault();const payload={};for(const [key,id]of Object.entries(optionFields)){const input=$(id);payload[key]=input.type==='checkbox'?input.checked:input.type==='number'?Number(input.value):input.value;}payload.scheduleDays=[...$('schedule-days').querySelectorAll('input:checked')].map(e=>Number(e.value));if(await command('options',payload))notice('Автоматизация сохранена');};
+$('profile-save').onclick=async()=>{const name=$('profile-name').value;if(await command('profile-save',{name})){$('profile-name').value='';notice('Профиль сохранён');}};
+$('check-update').onclick=async()=>{const r=await command('check-update');if(r?.result)notice(r.result);};
 $('telegram-form').onsubmit=async e=>{e.preventDefault();const token=$('telegram-token').value;$('telegram-token').value='';if(await command('telegram',{token,enabled:$('telegram-enabled').checked,chatId:$('telegram-chat').value,errors:$('telegram-errors').checked,daily:$('telegram-daily').checked,dailyTime:$('telegram-time').value}))notice('Настройки Telegram сохранены');};
 for(const [id,name]of [['backup-export','export-backup'],['backup-restore','restore-backup']])$(id).onclick=async()=>{const password=$('backup-password').value;$('backup-password').value='';const r=await command(name,{password,includeTokens:$('backup-tokens').checked});if(r?.result)notice(r.result);};
 $('export-diagnostics').onclick=async()=>{const r=await command('export-diagnostics');if(r?.result)notice(r.result);};

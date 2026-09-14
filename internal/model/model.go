@@ -69,6 +69,20 @@ type Options struct {
 	BreakEvery      int    `json:"breakEvery"`
 	BreakMinutes    int    `json:"breakMinutes"`
 	StopAfter       int    `json:"stopAfter"`
+	TrafficMode     string `json:"trafficMode"`
+}
+type ProfileAccount struct {
+	Name            string   `json:"name"`
+	AppIDs          []uint32 `json:"appids"`
+	BatchSize       int      `json:"batchSize"`
+	RotationMinutes int      `json:"rotationMinutes"`
+	AutoStart       bool     `json:"autoStart"`
+}
+type Profile struct {
+	ID       string           `json:"id"`
+	Name     string           `json:"name"`
+	Accounts []ProfileAccount `json:"accounts"`
+	Options  Options          `json:"options"`
 }
 type Telegram struct {
 	Enabled   bool   `json:"enabled"`
@@ -95,6 +109,7 @@ type Features struct {
 	Logs          []Log                   `json:"logs"`
 	Notifications []Notice                `json:"notifications"`
 	Telegram      Telegram                `json:"telegram"`
+	Profiles      []Profile               `json:"profiles"`
 }
 type Secret struct {
 	RefreshToken string `json:"refreshToken"`
@@ -103,10 +118,10 @@ type Secret struct {
 }
 
 func Defaults() Options {
-	return Options{StartupDelay: 60, LibraryHours: 24, ScheduleStart: "00:00", ScheduleEnd: "00:00", ScheduleDays: []int{0, 1, 2, 3, 4, 5, 6}, BreakMinutes: 10}
+	return Options{StartupDelay: 60, LibraryHours: 24, ScheduleStart: "00:00", ScheduleEnd: "00:00", ScheduleDays: []int{0, 1, 2, 3, 4, 5, 6}, BreakMinutes: 10, TrafficMode: "normal"}
 }
 func NewFeatures() Features {
-	return Features{Version: 1, Options: Defaults(), Accounts: map[string]*AccountData{}, Logs: []Log{}, Notifications: []Notice{}, Telegram: Telegram{DailyTime: "21:00", Daily: true, Errors: true}}
+	return Features{Version: 1, Options: Defaults(), Accounts: map[string]*AccountData{}, Logs: []Log{}, Notifications: []Notice{}, Telegram: Telegram{DailyTime: "21:00", Daily: true, Errors: true}, Profiles: []Profile{}}
 }
 func NewData() *AccountData {
 	return &AccountData{Library: []Game{}, Custom: []Game{}, Presets: []Preset{}, Goals: []Goal{}, Days: map[string]*Totals{}, Games: map[string]int64{}}
@@ -171,6 +186,9 @@ func (o Options) Validate() error {
 	if o.StartupDelay < 0 || o.StartupDelay > 3600 || o.LibraryHours < 0 || o.LibraryHours > 720 || o.BreakEvery < 0 || o.BreakEvery > 10080 || o.BreakMinutes < 1 || o.BreakMinutes > 1440 || o.StopAfter < 0 || o.StopAfter > 43200 || !ValidTime(o.ScheduleStart) || !ValidTime(o.ScheduleEnd) {
 		return errors.New("Проверь интервалы и время автоматизации")
 	}
+	if o.TrafficMode != "normal" && o.TrafficMode != "low" {
+		return errors.New("Неверный режим трафика")
+	}
 	for _, d := range o.ScheduleDays {
 		if d < 0 || d > 6 {
 			return errors.New("Неверный день недели")
@@ -181,6 +199,9 @@ func (o Options) Validate() error {
 func Validate(c *Config, f *Features) error {
 	if c.Version != 1 || f.Version != 1 || len(c.Accounts) > 3 {
 		return errors.New("Неверный формат локальных данных")
+	}
+	if f.Options.TrafficMode == "" {
+		f.Options.TrafficMode = "normal"
 	}
 	if err := f.Options.Validate(); err != nil {
 		return err
@@ -197,6 +218,37 @@ func Validate(c *Config, f *Features) error {
 	}
 	if f.Notifications == nil {
 		f.Notifications = []Notice{}
+	}
+	if f.Profiles == nil {
+		f.Profiles = []Profile{}
+	}
+	if len(f.Profiles) > 30 {
+		return errors.New("Слишком много профилей")
+	}
+	profileNames := map[string]bool{}
+	for i := range f.Profiles {
+		p := &f.Profiles[i]
+		p.Name = strings.TrimSpace(p.Name)
+		if !ValidID(p.ID) || p.Name == "" || len([]rune(p.Name)) > 80 || profileNames[strings.ToLower(p.Name)] || len(p.Accounts) > 3 {
+			return errors.New("Повреждён профиль")
+		}
+		if p.Options.TrafficMode == "" {
+			p.Options.TrafficMode = "normal"
+		}
+		if p.Options.Validate() != nil {
+			return errors.New("Повреждены настройки профиля")
+		}
+		profileNames[strings.ToLower(p.Name)] = true
+		seen := map[string]bool{}
+		for _, a := range p.Accounts {
+			if !ValidName(a.Name) || seen[strings.ToLower(a.Name)] || a.BatchSize < 1 || a.BatchSize > 32 || a.RotationMinutes < 1 || a.RotationMinutes > 1440 {
+				return errors.New("Повреждён профиль аккаунта")
+			}
+			if _, err := ParseIDs(a.AppIDs); err != nil {
+				return err
+			}
+			seen[strings.ToLower(a.Name)] = true
+		}
 	}
 	for i := range c.Accounts {
 		a := &c.Accounts[i]
