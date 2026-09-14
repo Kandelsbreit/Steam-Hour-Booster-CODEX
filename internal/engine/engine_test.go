@@ -206,12 +206,50 @@ func TestRotationAndStatistics(t *testing.T) {
 	c.mu.Lock()
 	third := c.played[2]
 	c.mu.Unlock()
-	if !reflect.DeepEqual(third, []uint32{65}) {
+	want := append([]uint32{65}, makeRange(33, 63)...)
+	if !reflect.DeepEqual(third, want) {
 		t.Fatal(third)
 	}
 	_, d := f.e.Data()
 	if d.Accounts[f.id].ActiveMS < 60000 {
 		t.Fatal("active time missing")
+	}
+}
+
+func makeRange(first, last uint32) []uint32 {
+	ids := make([]uint32, 0, last-first+1)
+	for n := first; n <= last; n++ {
+		ids = append(ids, n)
+	}
+	return ids
+}
+
+func TestGameBatchesFillFinalBatchFromPrevious(t *testing.T) {
+	ids := makeRange(1, 65)
+	batches := gameBatches(ids, 32)
+	if len(batches) != 3 {
+		t.Fatalf("batches = %d", len(batches))
+	}
+	if !reflect.DeepEqual(batches[0], makeRange(1, 32)) || !reflect.DeepEqual(batches[1], makeRange(33, 64)) {
+		t.Fatal(batches)
+	}
+	want := append([]uint32{65}, makeRange(33, 63)...)
+	if !reflect.DeepEqual(batches[2], want) {
+		t.Fatalf("last batch = %v, want %v", batches[2], want)
+	}
+	seen := map[uint32]bool{}
+	for _, id := range batches[2] {
+		if seen[id] {
+			t.Fatalf("duplicate AppID %d in final batch", id)
+		}
+		seen[id] = true
+	}
+}
+
+func TestGameBatchesDoesNotInventGamesBelowBatchLimit(t *testing.T) {
+	got := gameBatches(makeRange(1, 31), 32)
+	if !reflect.DeepEqual(got, [][]uint32{makeRange(1, 31)}) {
+		t.Fatal(got)
 	}
 }
 func TestRemotePauseResume(t *testing.T) {

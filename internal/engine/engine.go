@@ -581,10 +581,10 @@ func (e *Engine) apply(a model.Account, r *live) {
 		r.status = "В сети: выбери игры и сохрани"
 		return
 	}
-	count := (len(a.AppIDs) + a.BatchSize - 1) / a.BatchSize
+	batches := gameBatches(a.AppIDs, a.BatchSize)
+	count := len(batches)
 	r.index %= count
-	start := r.index * a.BatchSize
-	batch := append([]uint32{}, a.AppIDs[start:min(start+a.BatchSize, len(a.AppIDs))]...)
+	batch := batches[r.index]
 	if reflect.DeepEqual(batch, r.sent) {
 		r.status = "Работает"
 		return
@@ -620,6 +620,28 @@ func (e *Engine) apply(a model.Account, r *live) {
 		r.status = "Работает"
 		e.log(a.ID, fmt.Sprintf("Подтверждена партия %d/%d: %d игр", r.index+1, count, len(batch)))
 	})
+}
+
+// gameBatches keeps Steam's 32-game maximum full whenever the account has at
+// least that many games. The final, otherwise short batch is filled with games
+// from the preceding batch. AppIDs are unique in an account, so this never
+// sends a duplicate within one PlayGames request.
+func gameBatches(ids []uint32, size int) [][]uint32 {
+	if size < 1 || len(ids) == 0 {
+		return [][]uint32{}
+	}
+	count := (len(ids) + size - 1) / size
+	batches := make([][]uint32, 0, count)
+	for start := 0; start < len(ids); start += size {
+		batches = append(batches, append([]uint32{}, ids[start:min(start+size, len(ids))]...))
+	}
+	last := batches[len(batches)-1]
+	if len(batches) > 1 && len(last) < size {
+		previous := batches[len(batches)-2]
+		last = append(last, previous[:size-len(last)]...)
+		batches[len(batches)-1] = last
+	}
+	return batches
 }
 func (e *Engine) libraryLocked(id string, r *live) {
 	r.libraryBusy = true
@@ -732,11 +754,11 @@ func (e *Engine) Snapshot() map[string]any {
 		b, _ := json.Marshal(a)
 		item := map[string]any{}
 		_ = json.Unmarshal(b, &item)
-		count := (len(a.AppIDs) + a.BatchSize - 1) / a.BatchSize
+		batches := gameBatches(a.AppIDs, a.BatchSize)
+		count := len(batches)
 		queue := []map[string]any{}
-		for i := 0; i < count; i++ {
-			start := i * a.BatchSize
-			queue = append(queue, map[string]any{"index": i, "appids": a.AppIDs[start:min(start+a.BatchSize, len(a.AppIDs))]})
+		for i, batch := range batches {
+			queue = append(queue, map[string]any{"index": i, "appids": batch})
 		}
 		goals := []model.Goal{}
 		for _, g := range d.Goals {
