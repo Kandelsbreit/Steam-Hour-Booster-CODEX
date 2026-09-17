@@ -1,11 +1,11 @@
 {
  "$schema":"https://wails.io/schemas/config.v2.json",
- "name":"AgniaSteamHours",
- "outputfilename":"AgniaSteamHours.exe",
- "frontend:dir":"frontend",
- "frontend:install":"",
- "frontend:build":"",
- "frontend:dev:watcher":"",
- "author":{"name":"Agnia"},
-  "info":{"productName":"Agnia Steam Hours","productVersion":"2.1.0","comments":"Wails + Go"}
+  "name":"SteamHoursBooster",
+  "outputfilename":"SteamHoursBooster.exe",
+  "frontend:dir":"frontend",
+  "frontend:install":"",
+  "frontend:build":"",
+  "frontend:dev:watcher":"",
+  "author":{"name":"SteamHours"},
+  "info":{"productName":"Steam Hours Booster","productVersion":"2.2.0","comments":"Wails + Go"}
 }

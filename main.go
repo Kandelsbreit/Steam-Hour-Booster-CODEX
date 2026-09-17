@@ -33,8 +33,8 @@ func main() {
 		return
 	}
 	app := &App{dir: dir, test: profile != ""}
-	key := fmt.Sprintf("agnia-wails-%x", sha256.Sum256([]byte(strings.ToLower(dir))))
-	err = wails.Run(&options.App{Title: "Agnia Steam Hours", Width: 1260, Height: 900, MinWidth: 980, MinHeight: 700, BackgroundColour: options.NewRGB(16, 18, 27), AssetServer: &assetserver.Options{Assets: assets}, Bind: []interface{}{app}, OnStartup: app.startup, OnDomReady: app.ready, OnShutdown: app.shutdown, OnBeforeClose: app.beforeClose, SingleInstanceLock: &options.SingleInstanceLock{UniqueId: key, OnSecondInstanceLaunch: func(options.SecondInstanceData) { app.show() }}, Windows: &windows.Options{Theme: windows.Dark, WebviewUserDataPath: filepath.Join(dir, "webview2"), OnSuspend: func() { app.suspend() }, OnResume: func() { app.suspend() }}})
+	key := fmt.Sprintf("steamhours-wails-%x", sha256.Sum256([]byte(strings.ToLower(dir))))
+	err = wails.Run(&options.App{Title: "Steam Hours Booster", Width: 1260, Height: 900, MinWidth: 980, MinHeight: 700, BackgroundColour: options.NewRGB(16, 18, 27), AssetServer: &assetserver.Options{Assets: assets}, Bind: []interface{}{app}, OnStartup: app.startup, OnDomReady: app.ready, OnShutdown: app.shutdown, OnBeforeClose: app.beforeClose, SingleInstanceLock: &options.SingleInstanceLock{UniqueId: key, OnSecondInstanceLaunch: func(options.SecondInstanceData) { app.show() }}, Windows: &windows.Options{Theme: windows.Dark, WebviewUserDataPath: filepath.Join(dir, "webview2"), OnSuspend: func() { app.suspend() }, OnResume: func() { app.suspend() }}})
 	if err != nil {
 		platform.ErrorBox("Не удалось запустить приложение: " + err.Error())
 	}

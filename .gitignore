@@ -7,5 +7,6 @@ source/.smoke-data/
 .test-output/
 *.log
 .release-staging/
-build/
+build/bin/
+.freebuff/
 frontend/wailsjs/

@@ -92,7 +92,11 @@ func (e *Engine) log(id, msg string) {
 	}
 }
 func (e *Engine) alert(msg string) {
-	n := model.Notice{Time: e.clock().UnixMilli(), Message: msg}
+	e.alertKind(msg, "")
+}
+
+func (e *Engine) alertKind(msg, kind string) {
+	n := model.Notice{Time: e.clock().UnixMilli(), Message: msg, Kind: kind}
 	select {
 	case e.alerts <- n:
 	default:
@@ -123,9 +127,6 @@ func (e *Engine) Add(name string) (string, error) {
 	name = strings.TrimSpace(name)
 	if !model.ValidName(name) {
 		return "", errors.New("Введи логин Steam, а не имя профиля")
-	}
-	if len(e.Config.Accounts) >= 3 {
-		return "", errors.New("Можно добавить до трёх аккаунтов")
 	}
 	for _, a := range e.Config.Accounts {
 		if strings.EqualFold(a.Name, name) {
@@ -303,6 +304,9 @@ func (e *Engine) connect(a model.Account, r *live, password string) {
 			e.playing(a.ID, r, true)
 		}
 		e.log(a.ID, "Вход выполнен")
+		if e.Features.Telegram.NotifyConnect {
+			e.alertKind("Вход аккаунта "+a.Name+" выполнен", "connect")
+		}
 	})
 }
 func (e *Engine) detach(r *live) {
@@ -700,6 +704,12 @@ func (e *Engine) libraryLocked(id string, r *live) {
 	})
 }
 func (e *Engine) RefreshLibrary(id string) error {
+	return e.refreshLibrary(id, false)
+}
+func (e *Engine) ForceRefreshLibrary(id string) error {
+	return e.refreshLibrary(id, true)
+}
+func (e *Engine) refreshLibrary(id string, force bool) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	_, r, err := e.account(id)
@@ -712,11 +722,20 @@ func (e *Engine) RefreshLibrary(id string) error {
 	if r.libraryBusy {
 		return nil
 	}
-	if e.clock().UnixMilli()-r.libraryAttempt < 60000 {
+	if !force && e.clock().UnixMilli()-r.libraryAttempt < 60000 {
 		return errors.New("Обновление доступно раз в минуту")
 	}
 	e.libraryLocked(id, r)
 	return nil
+}
+func (e *Engine) LibraryBusy(id string) bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	_, r, err := e.account(id)
+	if err != nil {
+		return false
+	}
+	return r.libraryBusy
 }
 func (e *Engine) goals(id string) {
 	d := e.Features.Accounts[id]
@@ -805,7 +824,7 @@ func (e *Engine) Snapshot() map[string]any {
 	}
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
-	return model.Clone(map[string]any{"version": "2.1.0", "autoLaunch": e.Config.AutoLaunch, "accounts": accounts, "logs": e.Features.Logs, "notifications": e.Features.Notifications, "options": e.Features.Options, "telegram": e.Features.Telegram, "profiles": e.Features.Profiles, "presets": Builtins, "popular": Popular, "dataPath": e.Store.Dir, "fatal": e.fatal, "health": map[string]any{"uptimeMs": e.clock().Sub(e.startedAt).Milliseconds(), "heartbeat": e.lastTick.UnixMilli(), "network": true, "memoryMB": m.Sys / 1048576, "bytes": map[string]int{"httpReceived": 0, "httpSent": 0, "requests": 0}}})
+	return model.Clone(map[string]any{"version": "2.2.0", "autoLaunch": e.Config.AutoLaunch, "accounts": accounts, "logs": e.Features.Logs, "notifications": e.Features.Notifications, "options": e.Features.Options, "telegram": e.Features.Telegram, "profiles": e.Features.Profiles, "presets": Builtins, "popular": Popular, "dataPath": e.Store.Dir, "fatal": e.fatal, "health": map[string]any{"uptimeMs": e.clock().Sub(e.startedAt).Milliseconds(), "heartbeat": e.lastTick.UnixMilli(), "network": true, "memoryMB": m.Sys / 1048576, "bytes": map[string]int{"httpReceived": 0, "httpSent": 0, "requests": 0}}})
 }
 func (e *Engine) Data() (model.Config, model.Features) {
 	e.mu.Lock()
@@ -840,6 +859,25 @@ func (e *Engine) UpdateTelegramProgress(offset int64, daily string) error {
 	return e.save()
 }
 func (e *Engine) DiagnosticLog(msg string) { e.mu.Lock(); defer e.mu.Unlock(); e.log("", msg) }
+
+// GoalProgress computes current goal progress in minutes. Basis "steam" reads
+// server playtime_forever minutes from the cached library, anything else uses
+// the local millisecond counter.
+func (e *Engine) GoalProgress(id string, g model.Goal) *float64 {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.progress(e.Features.Accounts[id], g)
+}
+func (e *Engine) UpdateAccountLastPlaytime(id string, m map[string]float64) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	d := e.Features.Accounts[id]
+	if d == nil {
+		return errors.New("аккаунт не найден")
+	}
+	d.LastTwoWeeksPlaytime = m
+	return e.save()
+}
 func (e *Engine) Remove(id string) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()

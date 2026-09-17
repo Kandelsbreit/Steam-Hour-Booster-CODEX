@@ -47,16 +47,17 @@ type Totals struct {
 	GameMS   int64 `json:"gameMs"`
 }
 type AccountData struct {
-	Library   []Game             `json:"library"`
-	LibraryAt int64              `json:"libraryAt"`
-	Custom    []Game             `json:"custom"`
-	Presets   []Preset           `json:"presets"`
-	Goals     []Goal             `json:"goals"`
-	Days      map[string]*Totals `json:"days"`
-	Games     map[string]int64   `json:"games"`
-	ActiveMS  int64              `json:"activeMs"`
-	GameMS    int64              `json:"gameMs"`
-	LicenseAt int64              `json:"licenseAt"`
+	Library              []Game             `json:"library"`
+	LibraryAt            int64              `json:"libraryAt"`
+	Custom               []Game             `json:"custom"`
+	Presets              []Preset           `json:"presets"`
+	Goals                []Goal             `json:"goals"`
+	Days                 map[string]*Totals `json:"days"`
+	Games                map[string]int64   `json:"games"`
+	ActiveMS             int64              `json:"activeMs"`
+	GameMS               int64              `json:"gameMs"`
+	LicenseAt            int64              `json:"licenseAt"`
+	LastTwoWeeksPlaytime map[string]float64 `json:"lastTwoWeeksPlaytime,omitempty"`
 }
 type Options struct {
 	StartupDelay    int    `json:"startupDelay"`
@@ -85,13 +86,15 @@ type Profile struct {
 	Options  Options          `json:"options"`
 }
 type Telegram struct {
-	Enabled   bool   `json:"enabled"`
-	ChatID    string `json:"chatId"`
-	DailyTime string `json:"dailyTime"`
-	Daily     bool   `json:"daily"`
-	Errors    bool   `json:"errors"`
-	Offset    int64  `json:"offset"`
-	LastDaily string `json:"lastDaily"`
+	Enabled       bool   `json:"enabled"`
+	ChatID        string `json:"chatId"`
+	DailyTime     string `json:"dailyTime"`
+	Daily         bool   `json:"daily"`
+	Errors        bool   `json:"errors"`
+	NotifyConnect bool   `json:"notifyConnect"`
+	MuteUntil     int64  `json:"muteUntil"`
+	Offset        int64  `json:"offset"`
+	LastDaily     string `json:"lastDaily"`
 }
 type Log struct {
 	Time    int64  `json:"time"`
@@ -101,6 +104,7 @@ type Log struct {
 type Notice struct {
 	Time    int64  `json:"time"`
 	Message string `json:"message"`
+	Kind    string `json:"kind,omitempty"`
 }
 type Features struct {
 	Version       int                     `json:"version"`
@@ -121,10 +125,10 @@ func Defaults() Options {
 	return Options{StartupDelay: 60, LibraryHours: 24, ScheduleStart: "00:00", ScheduleEnd: "00:00", ScheduleDays: []int{0, 1, 2, 3, 4, 5, 6}, BreakMinutes: 10, TrafficMode: "normal"}
 }
 func NewFeatures() Features {
-	return Features{Version: 1, Options: Defaults(), Accounts: map[string]*AccountData{}, Logs: []Log{}, Notifications: []Notice{}, Telegram: Telegram{DailyTime: "21:00", Daily: true, Errors: true}, Profiles: []Profile{}}
+	return Features{Version: 1, Options: Defaults(), Accounts: map[string]*AccountData{}, Logs: []Log{}, Notifications: []Notice{}, Telegram: Telegram{DailyTime: "21:00", Daily: true, Errors: true, NotifyConnect: true}, Profiles: []Profile{}}
 }
 func NewData() *AccountData {
-	return &AccountData{Library: []Game{}, Custom: []Game{}, Presets: []Preset{}, Goals: []Goal{}, Days: map[string]*Totals{}, Games: map[string]int64{}}
+	return &AccountData{Library: []Game{}, Custom: []Game{}, Presets: []Preset{}, Goals: []Goal{}, Days: map[string]*Totals{}, Games: map[string]int64{}, LastTwoWeeksPlaytime: map[string]float64{}}
 }
 func Clone[T any](v T) T { b, _ := json.Marshal(v); var out T; _ = json.Unmarshal(b, &out); return out }
 
@@ -140,54 +144,69 @@ func ParseIDs(v any) ([]uint32, error) {
 	switch x := v.(type) {
 	case string:
 		items = strings.FieldsFunc(x, func(r rune) bool { return r == ' ' || r == '\n' || r == '\r' || r == '\t' || r == ',' || r == ';' })
-	case []uint32:
-		for _, n := range x {
-			items = append(items, strconv.FormatUint(uint64(n), 10))
-		}
 	case []any:
-		for _, n := range x {
-			items = append(items, fmt.Sprint(n))
+		for _, item := range x {
+			items = append(items, fmt.Sprint(item))
 		}
-	case nil:
+	case []uint32:
+		return append([]uint32{}, x...), nil
+	case []int:
+		out := make([]uint32, len(x))
+		for i, n := range x {
+			if n <= 0 {
+				return nil, errors.New("AppID должен быть положительным числом")
+			}
+			out[i] = uint32(n)
+		}
+		return out, nil
 	default:
-		return nil, errors.New("Неверный список AppID")
+		return nil, errors.New("Неверный формат AppID")
 	}
-	if len(items) > 10000 {
-		return nil, errors.New("Максимум 10 000 игр")
-	}
-	out := []uint32{}
 	seen := map[uint32]bool{}
-	for _, s := range items {
-		if s == "" || strings.Trim(s, "0123456789") != "" {
-			return nil, errors.New("AppID должны быть целыми положительными числами")
+	out := []uint32{}
+	for _, raw := range items {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			continue
 		}
-		n, err := strconv.ParseUint(s, 10, 32)
-		if err != nil || n == 0 {
-			return nil, errors.New("Неверный AppID")
+		n, err := strconv.ParseUint(raw, 10, 32)
+		if err != nil || n == 0 || n > 4294967295 {
+			return nil, errors.New("AppID должен быть положительным числом")
 		}
-		if !seen[uint32(n)] {
-			out = append(out, uint32(n))
-			seen[uint32(n)] = true
+		id := uint32(n)
+		if !seen[id] {
+			seen[id] = true
+			out = append(out, id)
 		}
 	}
 	return out, nil
 }
-func (a Account) Validate() error {
+func (a *Account) Validate() error {
+	a.Name = strings.TrimSpace(a.Name)
 	if !ValidID(a.ID) || !ValidName(a.Name) {
-		return errors.New("Неверный аккаунт")
+		return errors.New("Неверные данные аккаунта")
 	}
-	if a.BatchSize < 1 || a.BatchSize > 32 || a.RotationMinutes < 1 || a.RotationMinutes > 1440 {
-		return errors.New("Размер партии: 1–32; ротация: 1–1440 минут")
+	if a.BatchSize < 1 || a.BatchSize > 32 {
+		return errors.New("Размер партии: от 1 до 32")
 	}
-	_, err := ParseIDs(a.AppIDs)
-	return err
+	if a.RotationMinutes < 1 || a.RotationMinutes > 1440 {
+		return errors.New("Интервал ротации: от 1 до 1440 минут")
+	}
+	var err error
+	if a.AppIDs, err = ParseIDs(a.AppIDs); err != nil {
+		return err
+	}
+	return nil
 }
-func (o Options) Validate() error {
-	if o.StartupDelay < 0 || o.StartupDelay > 3600 || o.LibraryHours < 0 || o.LibraryHours > 720 || o.BreakEvery < 0 || o.BreakEvery > 10080 || o.BreakMinutes < 1 || o.BreakMinutes > 1440 || o.StopAfter < 0 || o.StopAfter > 43200 || !ValidTime(o.ScheduleStart) || !ValidTime(o.ScheduleEnd) {
-		return errors.New("Проверь интервалы и время автоматизации")
+func (o *Options) Validate() error {
+	if o.StartupDelay < 0 || o.StartupDelay > 3600 || o.LibraryHours < 0 || o.LibraryHours > 168 || o.BreakEvery < 0 || o.BreakEvery > 1440 || o.BreakMinutes < 1 || o.BreakMinutes > 1440 || o.StopAfter < 0 || o.StopAfter > 10080 {
+		return errors.New("Недопустимые параметры автоматизации")
 	}
 	if o.TrafficMode != "normal" && o.TrafficMode != "low" {
-		return errors.New("Неверный режим трафика")
+		return errors.New("Неверный режим сети")
+	}
+	if !ValidTime(o.ScheduleStart) || !ValidTime(o.ScheduleEnd) {
+		return errors.New("Неверное время расписания")
 	}
 	for _, d := range o.ScheduleDays {
 		if d < 0 || d > 6 {
@@ -197,7 +216,7 @@ func (o Options) Validate() error {
 	return nil
 }
 func Validate(c *Config, f *Features) error {
-	if c.Version != 1 || f.Version != 1 || len(c.Accounts) > 3 {
+	if c.Version != 1 || f.Version != 1 {
 		return errors.New("Неверный формат локальных данных")
 	}
 	if f.Options.TrafficMode == "" {
@@ -229,7 +248,7 @@ func Validate(c *Config, f *Features) error {
 	for i := range f.Profiles {
 		p := &f.Profiles[i]
 		p.Name = strings.TrimSpace(p.Name)
-		if !ValidID(p.ID) || p.Name == "" || len([]rune(p.Name)) > 80 || profileNames[strings.ToLower(p.Name)] || len(p.Accounts) > 3 {
+		if !ValidID(p.ID) || p.Name == "" || len([]rune(p.Name)) > 80 || profileNames[strings.ToLower(p.Name)] {
 			return errors.New("Повреждён профиль")
 		}
 		if p.Options.TrafficMode == "" {
@@ -316,6 +335,9 @@ func Validate(c *Config, f *Features) error {
 	}
 	if !ValidTime(f.Telegram.DailyTime) || f.Telegram.Offset < 0 {
 		return errors.New("Неверные настройки Telegram")
+	}
+	if f.Telegram.MuteUntil < 0 {
+		return errors.New("Неверная тишина Telegram")
 	}
 	return nil
 }

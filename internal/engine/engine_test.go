@@ -419,8 +419,11 @@ func TestSleepAndThreeIndependentAccounts(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, _ = f.e.Add("third_account")
-	if _, err = f.e.Add("fourth"); err == nil {
-		t.Fatal("account limit")
+	if _, err = f.e.Add("fourth"); err != nil {
+		t.Fatalf("fourth account should be allowed: %v", err)
+	}
+	if _, err = f.e.Add("fifth"); err != nil {
+		t.Fatalf("fifth account should be allowed: %v", err)
 	}
 	if err = f.e.Start(second, "test"); err != nil {
 		t.Fatal(err)
@@ -465,6 +468,25 @@ func TestScheduleBreakStopAndGoals(t *testing.T) {
 		t.Fatal("stop timer")
 	}
 }
+func TestLoginEmitsConnectAlertWhenEnabled(t *testing.T) {
+	f := setup(t)
+	_, d := f.e.Data()
+	d.Telegram.NotifyConnect = true
+	d.Telegram.Enabled = true
+	if err := f.e.Store.Save(f.e.Config, d); err != nil {
+		t.Fatal(err)
+	}
+	_ = f.login(t)
+	select {
+	case n := <-f.e.Alerts():
+		if !strings.Contains(n.Message, "Вход аккаунта") || n.Kind != "connect" {
+			t.Fatal(n)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("connect alert missing")
+	}
+}
+
 func TestClearInvalidatesPendingPlay(t *testing.T) {
 	f := setup(t)
 	hold := make(chan struct{})

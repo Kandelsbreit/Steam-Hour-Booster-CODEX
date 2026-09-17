@@ -5,14 +5,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/Kandelsbreit/Steam-Hour-Booster-CODEX/internal/engine"
-	"github.com/Kandelsbreit/Steam-Hour-Booster-CODEX/internal/model"
-	"github.com/Kandelsbreit/Steam-Hour-Booster-CODEX/internal/netx"
 	"regexp"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/Kandelsbreit/Steam-Hour-Booster-CODEX/internal/engine"
+	"github.com/Kandelsbreit/Steam-Hour-Booster-CODEX/internal/model"
+	"github.com/Kandelsbreit/Steam-Hour-Booster-CODEX/internal/netx"
 )
 
 type Request func(context.Context, string, any, any) (int, error)
@@ -24,7 +25,7 @@ type Bot struct {
 	cancel    context.CancelFunc
 	done      chan struct{}
 	status    string
-	queue     []string
+	queue     []model.Notice
 	lastAlert time.Time
 }
 
@@ -93,6 +94,9 @@ func (b *Bot) Save(c model.Telegram, token string) error {
 		c.Offset = 0
 		c.LastDaily = ""
 	}
+	if token == "" {
+		c.MuteUntil = old.MuteUntil
+	}
 	previous, previousErr := b.e.Store.ReadSecret("telegram")
 	b.stop()
 	if token != "" {
@@ -148,6 +152,7 @@ type apiError struct {
 }
 
 func (e *apiError) Error() string { return e.Message }
+
 func (b *Bot) api(ctx context.Context, method string, body any, out any) error {
 	token, err := b.e.Store.ReadSecret("telegram")
 	if err != nil {
@@ -191,13 +196,30 @@ func (b *Bot) api(ctx context.Context, method string, body any, out any) error {
 	}
 	return nil
 }
+
+// Notify queues an alert for delivery from the polling loop. Goal messages are
+// always delivered when the bot is on, error notices follow the switch and the
+// rate limit, "connect" notices additionally require NotifyConnect, and
+// everything respects the mute window set by /mute.
 func (b *Bot) Notify(n model.Notice) {
 	c := b.e.TelegramConfig()
 	if !c.Enabled {
 		return
 	}
 	goal := strings.HasPrefix(n.Message, "Цель ")
-	if !goal && !c.Errors {
+	switch {
+	case goal:
+	case n.Kind == "connect":
+		if !c.NotifyConnect {
+			return
+		}
+	default:
+		if !c.Errors {
+			return
+		}
+	}
+	now := time.Now()
+	if c.MuteUntil > now.UnixMilli() {
 		return
 	}
 	b.mu.Lock()
@@ -206,12 +228,13 @@ func (b *Bot) Notify(n model.Notice) {
 		return
 	}
 	if !goal {
-		b.lastAlert = time.Now()
+		b.lastAlert = now
 	}
 	if len(b.queue) < 20 {
-		b.queue = append(b.queue, n.Message)
+		b.queue = append(b.queue, model.Notice{Time: n.Time, Message: n.Message})
 	}
 }
+
 func wait(ctx context.Context, d time.Duration) bool {
 	t := time.NewTimer(d)
 	defer t.Stop()
@@ -276,17 +299,20 @@ func (b *Bot) run(ctx context.Context) {
 				if !Allowed(u, c.ChatID, time.Now()) {
 					continue
 				}
-				reply := b.Execute(u.Message.Text)
-				if err := b.send(ctx, c.ChatID, reply); err != nil {
+				if err := b.sendParts(ctx, c.ChatID, b.Execute(u.Message.Text)); err != nil {
 					return err
 				}
 			}
 			b.mu.Lock()
 			n := min(10, len(b.queue))
-			messages := append([]string{}, b.queue[:n]...)
+			messages := append([]model.Notice{}, b.queue[:n]...)
 			b.mu.Unlock()
 			if n > 0 {
-				if err := b.send(ctx, c.ChatID, strings.Join(messages, "\n")); err != nil {
+				lines := []string{}
+				for _, m := range messages {
+					lines = append(lines, "⚠️ "+esc(m.Message))
+				}
+				if err := b.sendParts(ctx, c.ChatID, strings.Join(lines, "\n")); err != nil {
 					return err
 				}
 				b.mu.Lock()
@@ -296,7 +322,7 @@ func (b *Bot) run(ctx context.Context) {
 			now := time.Now()
 			day := now.Format("2006-01-02")
 			if c.Daily && c.LastDaily != day && now.Format("15:04") >= c.DailyTime {
-				if err := b.send(ctx, c.ChatID, "Ежедневная сводка\n"+b.Report()); err != nil {
+				if err := b.sendParts(ctx, c.ChatID, section("Ежедневная сводка")+"\n"+b.statusReport("")); err != nil {
 					return err
 				}
 				if err := b.e.UpdateTelegramProgress(0, day); err != nil {
@@ -329,38 +355,147 @@ func (b *Bot) run(ctx context.Context) {
 		}
 	}
 }
+
+// send delivers one message as Telegram HTML; if Telegram rejects the markup,
+// the same text is retried without parse_mode so a report is never lost.
 func (b *Bot) send(ctx context.Context, chat, text string) error {
 	r := []rune(text)
 	if len(r) > 3900 {
 		text = string(r[:3900])
 	}
-	return b.api(ctx, "sendMessage", map[string]any{"chat_id": chat, "text": text}, nil)
+	err := b.api(ctx, "sendMessage", map[string]any{"chat_id": chat, "text": text, "parse_mode": "HTML", "disable_web_page_preview": true}, nil)
+	if err == nil {
+		return nil
+	}
+	var api *apiError
+	if errors.As(err, &api) && api.Code == 400 {
+		return b.api(ctx, "sendMessage", map[string]any{"chat_id": chat, "text": text}, nil)
+	}
+	return err
 }
-func (b *Bot) Report() string {
-	s := b.e.Snapshot()
-	accounts := s["accounts"].([]any)
-	out := []string{}
-	day := time.Now().Format("2006-01-02")
-	for _, v := range accounts {
-		a := v.(map[string]any)
-		d := a["data"].(map[string]any)
-		today := float64(0)
-		if v, ok := d["days"].(map[string]any)[day]; ok {
-			today = v.(map[string]any)["gameMs"].(float64)
+
+// sendParts splits a long reply into Telegram-sized parts on line boundaries.
+func (b *Bot) sendParts(ctx context.Context, chat, text string) error {
+	for _, part := range splitMessage(text) {
+		if err := b.send(ctx, chat, part); err != nil {
+			return err
 		}
-		out = append(out, fmt.Sprintf("%s: %s\nСегодня: %.2f игровых ч; всего локально: %.2f ч\nАктивных игр: %d", a["name"], a["status"], today/3600000, d["gameMs"].(float64)/3600000, len(a["current"].([]any))))
+	}
+	return nil
+}
+
+// statusReport renders /status: live engine state plus the cached Steam
+// library, whose TwoWeeks minutes are the profile's "past two weeks" hours.
+func (b *Bot) statusReport(name string) string {
+	s := b.e.Snapshot()
+	_, f := b.e.Data()
+	now := time.Now()
+	accounts, _ := s["accounts"].([]any)
+	out := []string{}
+	for _, v := range accounts {
+		a, ok := v.(map[string]any)
+		if !ok {
+			continue
+		}
+		accountName, _ := a["name"].(string)
+		if name != "" && name != "all" && !strings.EqualFold(accountName, name) {
+			continue
+		}
+		id, _ := a["id"].(string)
+		out = append(out, formatStatus(a, f.Accounts[id], now))
 	}
 	if len(out) == 0 {
-		return "Аккаунтов нет"
+		if name != "" && name != "all" {
+			return "Аккаунт не найден"
+		}
+		return "Аккаунтов нет. Добавь их в программе."
 	}
-	return strings.Join(out, "\n\n")
+	return strings.Join(out, "\n")
 }
+
+func (b *Bot) refreshAccounts(name string) string {
+	c, f := b.e.Data()
+	now := time.Now()
+	out := []string{}
+	requested := false
+	for _, a := range c.Accounts {
+		if name != "" && name != "all" && !strings.EqualFold(a.Name, name) {
+			continue
+		}
+		requested = true
+		d := f.Accounts[a.ID]
+		dAge := int64(0)
+		if d != nil {
+			dAge = d.LibraryAt
+		}
+		age := ""
+		if dAge > 0 {
+			age = ", прошлые данные " + shortAgo(dAge, now)
+		}
+		if err := b.e.RefreshLibrary(a.ID); err != nil {
+			out = append(out, "⛔️ "+esc(a.Name)+": "+esc(err.Error()))
+			continue
+		}
+		out = append(out, "✅ "+esc(a.Name)+": запрос отправлен"+age+". Свежие часы появятся в /status через 1–2 минуты.")
+	}
+	if !requested {
+		if name == "" || name == "all" {
+			return "Аккаунтов нет. Добавь их в программе."
+		}
+		return "Аккаунт не найден"
+	}
+	return "Обновление библиотеки Steam\n" + strings.Join(out, "\n")
+}
+
+func (b *Bot) hoursReport() string {
+	c, _ := b.e.Data()
+	if len(c.Accounts) == 0 {
+		return "Аккаунтов нет. Добавь их в программе."
+	}
+
+	// Trigger library refresh for all online accounts
+	for _, a := range c.Accounts {
+		_ = b.e.ForceRefreshLibrary(a.ID)
+	}
+
+	// Wait up to 10 seconds for library updates to finish if busy
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		anyBusy := false
+		for _, a := range c.Accounts {
+			if b.e.LibraryBusy(a.ID) {
+				anyBusy = true
+				break
+			}
+		}
+		if !anyBusy {
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+
+	_, f := b.e.Data()
+	reports := []string{}
+	for _, a := range c.Accounts {
+		d := f.Accounts[a.ID]
+		rep := formatAccountHoursOnly(a.Name, d, true, func(m map[string]float64) {
+			_ = b.e.UpdateAccountLastPlaytime(a.ID, m)
+		})
+		reports = append(reports, rep)
+	}
+	return strings.Join(reports, "\n")
+}
+
 func (b *Bot) Execute(text string) string {
 	parts := strings.Fields(text)
 	if len(parts) == 0 {
 		return ""
 	}
 	command := strings.ToLower(strings.Split(parts[0], "@")[0])
+	arg := ""
+	if len(parts) > 1 {
+		arg = parts[1]
+	}
 	c, f := b.e.Data()
 	accounts := []model.Account{}
 	for _, a := range c.Accounts {
@@ -368,14 +503,59 @@ func (b *Bot) Execute(text string) string {
 			accounts = append(accounts, a)
 		}
 	}
-	out := []string{}
 	switch command {
+	case "/hours":
+		return b.hoursReport()
+	case "/start":
+		return formatWelcome()
+	case "/help":
+		return helpText()
 	case "/status", "/report":
-		return b.Report()
+		return b.statusReport(arg)
+	case "/refresh":
+		return b.refreshAccounts(arg)
+	case "/diagnostics":
+		return formatDiagnostics(b.e.Snapshot())
+	case "/goals":
+		id := ""
+		if arg != "" && arg != "all" {
+			for _, a := range accounts {
+				if strings.EqualFold(a.Name, arg) {
+					id = a.ID
+					break
+				}
+			}
+			if id == "" {
+				return "Аккаунт не найден"
+			}
+		}
+		return formatGoals(c, f, id, b.e, time.Now())
+	case "/mute":
+		if arg == "" {
+			return "Укажи минуты: /mute 60"
+		}
+		minutes, err := strconv.Atoi(arg)
+		if err != nil || minutes < 1 || minutes > 43200 {
+			return "Минуты: число от 1 до 43200"
+		}
+		t := b.e.TelegramConfig()
+		t.MuteUntil = time.Now().Add(time.Duration(minutes) * time.Minute).UnixMilli()
+		if err = b.e.SetTelegram(t); err != nil {
+			return err.Error()
+		}
+		return "🔕 Тишина до " + time.Now().Add(time.Duration(minutes)*time.Minute).Format("15:04:05") + " (" + strconv.Itoa(minutes) + " мин). /unmute — включить уведомления раньше."
+	case "/unmute":
+		t := b.e.TelegramConfig()
+		t.MuteUntil = 0
+		if err := b.e.SetTelegram(t); err != nil {
+			return err.Error()
+		}
+		return "🔔 Уведомления снова включены."
 	case "/pause", "/resume", "/next":
 		if len(accounts) == 0 {
 			return "Аккаунт не найден"
 		}
+		out := []string{}
 		for _, a := range accounts {
 			var err error
 			switch command {
@@ -387,25 +567,14 @@ func (b *Bot) Execute(text string) string {
 				err = b.e.Next(a.ID)
 			}
 			if err != nil {
-				out = append(out, a.Name+": "+err.Error())
+				out = append(out, "⛔️ "+esc(a.Name)+": "+esc(err.Error()))
 			} else {
-				out = append(out, a.Name+": выполнено")
+				what := map[string]string{"/pause": "остановлен", "/resume": "запущен", "/next": "переключён на следующую партию"}[command]
+				out = append(out, "✅ "+esc(a.Name)+": "+what)
 			}
 		}
 		return strings.Join(out, "\n")
-	case "/diagnostics":
-		return b.Report()
-	case "/goals":
-		for _, a := range c.Accounts {
-			for _, g := range f.Accounts[a.ID].Goals {
-				out = append(out, fmt.Sprintf("%s / %d: цель %.2f ч (%s)", a.Name, g.AppID, g.Hours, g.Basis))
-			}
-		}
-		if len(out) == 0 {
-			return "Целей нет"
-		}
-		return strings.Join(out, "\n")
-	case "/goal":
+	case "/goal", "/goal-set":
 		if len(accounts) != 1 || len(parts) < 4 {
 			return "/goal логин AppID часы [local|steam]"
 		}
@@ -419,9 +588,9 @@ func (b *Bot) Execute(text string) string {
 			basis = parts[4]
 		}
 		if err = b.e.Edit(accounts[0].ID, "goal-save", model.Preset{}, model.Game{}, model.Goal{AppID: ids[0], Hours: hours, Basis: basis}); err != nil {
-			return err.Error()
+			return esc(err.Error())
 		}
-		return "Цель сохранена"
+		return "✅ Цель сохранена"
 	}
-	return "/status /report /diagnostics /goals\n/pause [логин|all]\n/resume [логин|all]\n/next [логин|all]\n/goal логин AppID часы [local|steam]"
+	return helpText()
 }

@@ -105,7 +105,7 @@ const optionFields={startupDelay:'startup-delay',libraryHours:'library-hours',tr
 function initForms(){
   for(const [key,id]of Object.entries(optionFields)){const input=$(id);if(input.type==='checkbox')input.checked=state.options[key];else input.value=state.options[key];}
   $('schedule-days').replaceChildren(...[1,2,3,4,5,6,0].map(day=>{const label=el('label',undefined,'check');const check=el('input');check.type='checkbox';check.value=day;check.checked=state.options.scheduleDays.includes(day);label.append(check,document.createTextNode(['Вс','Пн','Вт','Ср','Чт','Пт','Сб'][day]));return label;}));
-  $('telegram-chat').value=state.telegram.chatId;$('telegram-enabled').checked=state.telegram.enabled;$('telegram-errors').checked=state.telegram.errors;$('telegram-daily').checked=state.telegram.daily;$('telegram-time').value=state.telegram.dailyTime;
+  $('telegram-chat').value=state.telegram.chatId;$('telegram-enabled').checked=state.telegram.enabled;$('telegram-errors').checked=state.telegram.errors;$('telegram-connect').checked=state.telegram.notifyConnect!==false;$('telegram-daily').checked=state.telegram.daily;$('telegram-time').value=state.telegram.dailyTime;
 }
 function renderProfiles(){
   const profiles=state.profiles||[];
@@ -117,7 +117,7 @@ function render(next){
   state=next;if(!state.accounts.some(a=>a.id===selected)){selected=state.accounts[0]?.id||null;if(selected)fill(currentAccount(),true);}
   const a=currentAccount();
   if(a&&!dirty&&JSON.stringify(a.appids)!==JSON.stringify(selectedIds().map(Number)))fill(a);
-  $('count').textContent=state.accounts.length+' / 3';$('add-form').hidden=state.accounts.length>=3;
+  $('count').textContent=String(state.accounts.length);$('add-form').hidden=false;
   $('autolaunch').checked=!!state.autoLaunch;
   $('empty').hidden=!!a||!['boost','games','presets'].includes(page);
   document.querySelectorAll('.account-required').forEach(e=>e.hidden=!a);
@@ -164,7 +164,7 @@ $('autolaunch').onchange=()=>command('autolaunch',{enabled:$('autolaunch').check
 $('options-form').onsubmit=async e=>{e.preventDefault();const payload={};for(const [key,id]of Object.entries(optionFields)){const input=$(id);payload[key]=input.type==='checkbox'?input.checked:input.type==='number'?Number(input.value):input.value;}payload.scheduleDays=[...$('schedule-days').querySelectorAll('input:checked')].map(e=>Number(e.value));if(await command('options',payload))notice('Автоматизация сохранена');};
 $('profile-save').onclick=async()=>{const name=$('profile-name').value;if(await command('profile-save',{name})){$('profile-name').value='';notice('Профиль сохранён');}};
 $('check-update').onclick=async()=>{const r=await command('check-update');if(r?.result)notice(r.result);};
-$('telegram-form').onsubmit=async e=>{e.preventDefault();const token=$('telegram-token').value;$('telegram-token').value='';if(await command('telegram',{token,enabled:$('telegram-enabled').checked,chatId:$('telegram-chat').value,errors:$('telegram-errors').checked,daily:$('telegram-daily').checked,dailyTime:$('telegram-time').value}))notice('Настройки Telegram сохранены');};
+$('telegram-form').onsubmit=async e=>{e.preventDefault();const token=$('telegram-token').value;$('telegram-token').value='';if(await command('telegram',{token,enabled:$('telegram-enabled').checked,chatId:$('telegram-chat').value,errors:$('telegram-errors').checked,notifyConnect:$('telegram-connect').checked,daily:$('telegram-daily').checked,dailyTime:$('telegram-time').value}))notice('Настройки Telegram сохранены');};
 for(const [id,name]of [['backup-export','export-backup'],['backup-restore','restore-backup']])$(id).onclick=async()=>{const password=$('backup-password').value;$('backup-password').value='';const r=await command(name,{password,includeTokens:$('backup-tokens').checked});if(r?.result)notice(r.result);};
 $('export-diagnostics').onclick=async()=>{const r=await command('export-diagnostics');if(r?.result)notice(r.result);};
 $('quit').onclick=()=>command('quit');window.steamHours.subscribe(render);window.steamHours.onError(notice);command('state');

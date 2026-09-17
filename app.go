@@ -107,7 +107,7 @@ func (a *App) ready(ctx context.Context) {
 	_, f := a.e.Data()
 	if !a.test {
 		go systray.Run(func() {
-			systray.SetTooltip("Agnia Steam Hours")
+			systray.SetTooltip("Steam Hours Booster")
 			systray.AddMenuItem("Открыть", "Показать окно").Click(a.show)
 			systray.AddMenuItem("Остановить все", "Остановить аккаунты").Click(a.e.StopAll)
 			systray.AddSeparator()
@@ -357,6 +357,8 @@ func (a *App) exportBackup(p map[string]any) (any, error) {
 	d := backup.Data{Version: 1, Config: c, Features: f, TokensIncluded: boolean(p, "includeTokens"), Tokens: map[string]string{}, Secrets: map[string]model.Secret{}}
 	d.Features.Telegram.Enabled = false
 	d.Features.Telegram.Offset = 0
+	d.Features.Telegram.NotifyConnect = false
+	d.Features.Telegram.MuteUntil = 0
 	if d.TokensIncluded {
 		for _, account := range c.Accounts {
 			if a.e.Store.Has(account.ID) {
@@ -429,6 +431,8 @@ func (a *App) restoreBackup(p map[string]any) (any, error) {
 	a.bot.Stop()
 	d.Features.Telegram.Enabled = false
 	d.Features.Telegram.Offset = 0
+	d.Features.Telegram.NotifyConnect = false
+	d.Features.Telegram.MuteUntil = 0
 	if err = a.e.Restore(d.Config, d.Features, secrets); err != nil {
 		a.bot.Restart()
 		return nil, err
