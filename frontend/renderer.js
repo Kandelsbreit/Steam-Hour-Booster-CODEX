@@ -56,7 +56,10 @@ function renderBoost(a){
   $('account-title').textContent=a.name;$('status').textContent=a.status;
   $('start').disabled=a.desired;$('stop').disabled=!a.desired&&!a.online&&!a.pendingAt;$('password').disabled=a.desired;
   $('session-hint').textContent=a.hasToken?'Вход сохранён. Оставь пароль пустым для входа по токену.':'Пароль не сохраняется. Steam может запросить код из приложения или почты.';
-  $('guard-area').hidden=!a.guard;if(a.guard){$('guard-label').textContent=a.guard.wrong?'Дождись нового кода Steam Guard':a.guard.kind==='email'?'Код из письма Steam':'Код Steam Guard';$('guard-send').disabled=Date.now()<a.guard.waitUntil;}
+  const confirmation=a.guard?.kind==='confirmation';
+  $('confirmation-hint').hidden=!confirmation;
+  $('guard-area').hidden=!a.guard||confirmation;
+  if(a.guard&&!confirmation){$('guard-label').textContent=a.guard.wrong?'Дождись нового кода Steam Guard':a.guard.kind==='email'?'Код из письма Steam':'Код Steam Guard';$('guard-send').disabled=Date.now()<a.guard.waitUntil;}
   $('active-time').textContent=duration(a.activeMs);$('game-time').textContent=hours(a.gameMs);
   $('batch-info').textContent=a.batchCount?`${a.batchIndex%a.batchCount+1}/${a.batchCount} · ${duration(a.remainingMs)}`:'—';
   $('queue-summary').textContent=`${a.appids.length} игр · до ${a.batchSize} одновременно · ротация ${a.rotationMinutes} мин`;
