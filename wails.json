@@ -7,5 +7,5 @@
   "frontend:build":"",
   "frontend:dev:watcher":"",
   "author":{"name":"SteamHours"},
-  "info":{"productName":"Steam Hours Booster","productVersion":"2.2.0","comments":"Wails + Go"}
+  "info":{"productName":"Steam Hours Booster","productVersion":"2.2.1","comments":"Wails + Go"}
 }

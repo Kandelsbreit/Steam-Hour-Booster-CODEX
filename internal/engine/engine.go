@@ -824,7 +824,7 @@ func (e *Engine) Snapshot() map[string]any {
 	}
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
-	return model.Clone(map[string]any{"version": "2.2.0", "autoLaunch": e.Config.AutoLaunch, "accounts": accounts, "logs": e.Features.Logs, "notifications": e.Features.Notifications, "options": e.Features.Options, "telegram": e.Features.Telegram, "profiles": e.Features.Profiles, "presets": Builtins, "popular": Popular, "dataPath": e.Store.Dir, "fatal": e.fatal, "health": map[string]any{"uptimeMs": e.clock().Sub(e.startedAt).Milliseconds(), "heartbeat": e.lastTick.UnixMilli(), "network": true, "memoryMB": m.Sys / 1048576, "bytes": map[string]int{"httpReceived": 0, "httpSent": 0, "requests": 0}}})
+	return model.Clone(map[string]any{"version": "2.2.1", "autoLaunch": e.Config.AutoLaunch, "accounts": accounts, "logs": e.Features.Logs, "notifications": e.Features.Notifications, "options": e.Features.Options, "telegram": e.Features.Telegram, "profiles": e.Features.Profiles, "presets": Builtins, "popular": Popular, "dataPath": e.Store.Dir, "fatal": e.fatal, "health": map[string]any{"uptimeMs": e.clock().Sub(e.startedAt).Milliseconds(), "heartbeat": e.lastTick.UnixMilli(), "network": true, "memoryMB": m.Sys / 1048576, "bytes": map[string]int{"httpReceived": 0, "httpSent": 0, "requests": 0}}})
 }
 func (e *Engine) Data() (model.Config, model.Features) {
 	e.mu.Lock()

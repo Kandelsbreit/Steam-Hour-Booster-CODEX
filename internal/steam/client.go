@@ -10,6 +10,8 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -46,6 +48,18 @@ type Error struct {
 	Message string
 }
 
+var sensitiveErrorRE = regexp.MustCompile(`(?i)(access[_-]?token|refresh[_-]?token|password|guard[_-]?data|secret)([\s:=]+)[^\s&,;]+`)
+
+func safeMessage(message string) string {
+	message = sensitiveErrorRE.ReplaceAllString(message, "$1$2[скрыто]")
+	if i := strings.Index(message, "?"); i >= 0 {
+		// Query strings can contain arbitrary credential names that are not in
+		// the allowlist above. Keep the endpoint, hide all query parameters.
+		message = message[:i] + "?[параметры скрыты]"
+	}
+	return strings.TrimSpace(message)
+}
+
 func (e *Error) Error() string { return e.Message }
 func Code(err error) int {
 	var s *Error
@@ -65,7 +79,13 @@ func Safe(err error) error {
 	if errors.Is(err, context.Canceled) {
 		return context.Canceled
 	}
-	return &Error{0, "Steam недоступен или время ожидания истекло"}
+	// Do not discard the library's safe diagnostic text: otherwise CM, VPN,
+	// timeout and protocol failures all look exactly the same to the user.
+	message := safeMessage(err.Error())
+	if message == "" {
+		message = "неизвестная ошибка подключения"
+	}
+	return &Error{0, "Steam: " + message}
 }
 
 type Adapter struct {
@@ -84,7 +104,18 @@ type Adapter struct {
 }
 
 func New(id string) (Client, error) {
-	c, e := gosteam.New(gosteam.Options{ID: id, ConnectionTimeout: 15 * time.Second, JobTimeout: 25 * time.Second, EventBuffer: 256, LogOutput: io.Discard})
+	opts := gosteam.Options{ID: id, ConnectionTimeout: 15 * time.Second, JobTimeout: 25 * time.Second, EventBuffer: 256, LogOutput: io.Discard}
+	// GoSteam v0.2.0 uses the system network transport. A local proxy can be
+	// selected explicitly when the VPN exposes one.
+	if proxy := strings.TrimSpace(os.Getenv("STEAM_PROXY")); proxy != "" {
+		switch {
+		case strings.HasPrefix(proxy, "http://"), strings.HasPrefix(proxy, "https://"):
+			opts.Proxy = gosteam.ProxyOptions{Type: gosteam.ProxyHTTP, URL: proxy}
+		case strings.HasPrefix(proxy, "socks5://"):
+			opts.Proxy = gosteam.ProxyOptions{Type: gosteam.ProxySOCKS5, URL: proxy}
+		}
+	}
+	c, e := gosteam.New(opts)
 	if e != nil {
 		return nil, Safe(e)
 	}

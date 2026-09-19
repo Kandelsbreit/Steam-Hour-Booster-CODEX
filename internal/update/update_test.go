@@ -20,7 +20,7 @@ func TestNewer(t *testing.T) {
 func TestCheckReportsReleaseWithoutDownloading(t *testing.T) {
 	c := New()
 	c.request = func(_ context.Context, _ string, _ any, out any) (int, error) {
-		payload, _ := json.Marshal(map[string]any{"tag_name": "v2.1.1", "html_url": "https://example.invalid/release"})
+		payload, _ := json.Marshal(map[string]any{"tag_name": "v2.3.1", "html_url": "https://example.invalid/release"})
 		_ = json.Unmarshal(payload, out)
 		return 200, nil
 	}
