@@ -53,8 +53,6 @@ var sensitiveErrorRE = regexp.MustCompile(`(?i)(access[_-]?token|refresh[_-]?tok
 func safeMessage(message string) string {
 	message = sensitiveErrorRE.ReplaceAllString(message, "$1$2[скрыто]")
 	if i := strings.Index(message, "?"); i >= 0 {
-		// Query strings can contain arbitrary credential names that are not in
-		// the allowlist above. Keep the endpoint, hide all query parameters.
 		message = message[:i] + "?[параметры скрыты]"
 	}
 	return strings.TrimSpace(message)
@@ -79,8 +77,6 @@ func Safe(err error) error {
 	if errors.Is(err, context.Canceled) {
 		return context.Canceled
 	}
-	// Do not discard the library's safe diagnostic text: otherwise CM, VPN,
-	// timeout and protocol failures all look exactly the same to the user.
 	message := safeMessage(err.Error())
 	if message == "" {
 		message = "неизвестная ошибка подключения"
@@ -104,9 +100,7 @@ type Adapter struct {
 }
 
 func New(id string) (Client, error) {
-	opts := gosteam.Options{ID: id, ConnectionTimeout: 15 * time.Second, JobTimeout: 25 * time.Second, EventBuffer: 256, LogOutput: io.Discard}
-	// GoSteam v0.2.0 uses the system network transport. A local proxy can be
-	// selected explicitly when the VPN exposes one.
+	opts := gosteam.Options{ID: id, ConnectionTimeout: 15 * time.Second, JobTimeout: 25 * time.Second, EventBuffer: 256, LogOutput: io.Discard, Transport: gosteam.TransportAuto, WebSocketPort: 443}
 	if proxy := strings.TrimSpace(os.Getenv("STEAM_PROXY")); proxy != "" {
 		switch {
 		case strings.HasPrefix(proxy, "http://"), strings.HasPrefix(proxy, "https://"):

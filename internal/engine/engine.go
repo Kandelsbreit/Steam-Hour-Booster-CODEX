@@ -343,7 +343,7 @@ func Backoff(code, failures int) time.Duration {
 	}
 	return time.Duration(min(300, 30*(1<<(failures-1)))) * time.Second
 }
-func (e *Engine) fail(id string, r *live, code int) {
+func (e *Engine) fail(id string, r *live, code int, details ...string) {
 	e.detach(r)
 	if !r.desired {
 		return
@@ -354,7 +354,11 @@ func (e *Engine) fail(id string, r *live, code int) {
 		r.failures++
 		delay := Backoff(code, r.failures)
 		r.retryAt = e.clock().Add(delay).UnixMilli()
-		r.status = fmt.Sprintf("Нет связи: повтор через %d с", int(delay.Seconds()))
+		reason := "Нет связи"
+		if len(details) > 0 && strings.TrimSpace(details[0]) != "" {
+			reason = strings.TrimSpace(details[0])
+		}
+		r.status = fmt.Sprintf("%s; повтор через %d с", reason, int(delay.Seconds()))
 		if code == 2 || code == 20 {
 			r.status = fmt.Sprintf("Steam временно недоступен: повтор через %d с", int(delay.Seconds()))
 		}
@@ -646,7 +650,7 @@ func (e *Engine) apply(a model.Account, r *live) {
 			return
 		}
 		if err != nil {
-			e.fail(a.ID, r, steam.Code(err))
+			e.fail(a.ID, r, steam.Code(err), err.Error())
 			return
 		}
 		r.sent = batch
@@ -824,7 +828,7 @@ func (e *Engine) Snapshot() map[string]any {
 	}
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
-	return model.Clone(map[string]any{"version": "2.2.1", "autoLaunch": e.Config.AutoLaunch, "accounts": accounts, "logs": e.Features.Logs, "notifications": e.Features.Notifications, "options": e.Features.Options, "telegram": e.Features.Telegram, "profiles": e.Features.Profiles, "presets": Builtins, "popular": Popular, "dataPath": e.Store.Dir, "fatal": e.fatal, "health": map[string]any{"uptimeMs": e.clock().Sub(e.startedAt).Milliseconds(), "heartbeat": e.lastTick.UnixMilli(), "network": true, "memoryMB": m.Sys / 1048576, "bytes": map[string]int{"httpReceived": 0, "httpSent": 0, "requests": 0}}})
+	return model.Clone(map[string]any{"version": "2.2.2", "autoLaunch": e.Config.AutoLaunch, "accounts": accounts, "logs": e.Features.Logs, "notifications": e.Features.Notifications, "options": e.Features.Options, "telegram": e.Features.Telegram, "profiles": e.Features.Profiles, "presets": Builtins, "popular": Popular, "dataPath": e.Store.Dir, "fatal": e.fatal, "health": map[string]any{"uptimeMs": e.clock().Sub(e.startedAt).Milliseconds(), "heartbeat": e.lastTick.UnixMilli(), "network": true, "memoryMB": m.Sys / 1048576, "bytes": map[string]int{"httpReceived": 0, "httpSent": 0, "requests": 0}}})
 }
 func (e *Engine) Data() (model.Config, model.Features) {
 	e.mu.Lock()

@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-const Current = "2.2.1"
+const Current = "2.2.2"
 const latestURL = "https://api.github.com/repos/Kandelsbreit/Steam-Hour-Booster-CODEX/releases/latest"
 
 type State struct {
